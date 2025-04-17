@@ -1,0 +1,20 @@
+{
+    "inference_id": "67fcb0e6-151b-4f8f-93d8-611459a5ba33",
+    "time": 0.014715338998939842,
+    "image": {
+        "width": 625,
+        "height": 885
+    },
+    "predictions": [
+        {
+            "x": 328.0,
+            "y": 616.5,
+            "width": 274.0,
+            "height": 149.0,
+            "confidence": 0.8617363572120667,
+            "class": "-Aparelho",
+            "class_id": 0,
+            "detection_id": "a7a25cbb-b7f3-4837-b455-f961f794a0f1"
+        }
+    ]
+}

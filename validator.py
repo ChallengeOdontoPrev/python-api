@@ -6,6 +6,7 @@ from urllib.parse import urlparse, unquote
 
 from azure.servicebus import ServiceBusClient
 from azure.storage.blob import BlobServiceClient
+from inference_sdk import InferenceHTTPClient
 
 # Configurações do Azure Blob Storage
 connection_string_blob = os.getenv("CONNECTION_BLOB")
@@ -14,7 +15,11 @@ container_name = "validation-image-container"
 # Configurações do Azure Service Bus
 connection_string_bus_listen = os.getenv("CONNECTION_BUS_LISTEN")
 queue_name = "validation-appointment"
-
+ 
+CLIENT = InferenceHTTPClient(
+    api_url="https://serverless.roboflow.com",
+    api_key=os.getenv("ROBOFLOW_API_KEY")
+)
 
 # Função auxiliar para extrair o caminho do blob a partir da URL
 def extract_blob_path_from_url(url):
@@ -54,8 +59,15 @@ def buscar_imagens(imgUrlInitial, imgUrlFinal):
 
 def validar_imagens(pathImgInitial, pathImgFinal):
     print("🧠 Função validar_imagens() iniciada.")
-    print(f"  Validando imagem inicial em: {pathImgInitial}")
-    print(f"  Validando imagem final em: {pathImgFinal}")
+    
+    result1 = CLIENT.infer(pathImgInitial, model_id="aparelho-dentario/2")
+    result1 = result1.get("predictions", [{}])[0].get("class")
+    result2 = CLIENT.infer(pathImgFinal, model_id="aparelho-dentario/2")
+    result2 = result2.get("predictions", [{}])[0].get("class")
+    
+    print(f"  Classe identificada na primeira img: {result1}")
+    print(f"  Classe identificada na segunda img: {result2}")
+
     return True
 
 
@@ -113,7 +125,11 @@ def processar_mensagem(mensagem):
 
 def receive_message_from_queue():
     servicebus_client = ServiceBusClient.from_connection_string(connection_string_bus_listen)
-    receiver = servicebus_client.get_queue_receiver(queue_name=queue_name)
+    
+    receiver = servicebus_client.get_queue_receiver(
+        queue_name=queue_name  # até 5 minutos, por exemplo
+    )
+
 
     try:
         print("🚀 Iniciando recepção de mensagens...\n")

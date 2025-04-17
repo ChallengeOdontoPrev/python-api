@@ -9,6 +9,8 @@ CLIENT = InferenceHTTPClient(
     api_key=os.getenv("ROBOFLOW_API_KEY")
 )
 
+
+
 @app.route('/compare', methods=['POST'])
 def compare_images():
     try:
