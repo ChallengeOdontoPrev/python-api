@@ -2,8 +2,8 @@ import json
 import os
 import time
 import uuid
+from database_manager import DatabaseManager
 from urllib.parse import urlparse, unquote
-
 from azure.servicebus import ServiceBusClient
 from azure.storage.blob import BlobServiceClient
 from inference_sdk import InferenceHTTPClient
@@ -28,8 +28,8 @@ def extract_blob_path_from_url(url):
 
 
 # Função para baixar as imagens do Azure Blob Storage para uma pasta local do projeto
-def buscar_imagens(imgUrlInitial, imgUrlFinal):
-    print("🔍 Função buscar_imagens() iniciada.")
+def search_images(imgUrlInitial, imgUrlFinal):
+    print("🔍 Função search_images() iniciada.")
 
     # Criar um cliente de serviço para acessar o Azure Blob Storage
     blob_service_client = BlobServiceClient.from_connection_string(connection_string_blob)
@@ -57,8 +57,8 @@ def buscar_imagens(imgUrlInitial, imgUrlFinal):
     return [temp_img_initial_path, temp_img_final_path]
 
 
-def validar_imagens(pathImgInitial, pathImgFinal):
-    print("🧠 Função validar_imagens() iniciada.")
+def validate_images(pathImgInitial, pathImgFinal, classInitial, classFinal):
+    print("🧠 Função validate_images() iniciada.")
     
     result1 = CLIENT.infer(pathImgInitial, model_id="aparelho-dentario/2")
     result1 = result1.get("predictions", [{}])[0].get("class")
@@ -67,16 +67,51 @@ def validar_imagens(pathImgInitial, pathImgFinal):
     
     print(f"  Classe identificada na primeira img: {result1}")
     print(f"  Classe identificada na segunda img: {result2}")
+    
+    result1 = formatar_classe(result1)
+    result2 = formatar_classe(result2)
+    
+    print(f"  Classe identificada na primeira img: {result1}")
+    print(f"  Classe identificada na segunda img: {result2}")
+    
+    if result1 == classInitial and result2 == classFinal:
+        print("✅ Validação concluída com sucesso!")
+        return True
+    else:  
+        print("❌ Validação falhou!")
+        return False
 
-    return True
 
+def _atualizar_status_validacao(idAppointment, novo_status_id):
+    """Função interna para atualizar o status da validação no banco de dados."""
+    print(f"⚙️ Iniciando atualização do status para {idAppointment} com status ID {novo_status_id}.")
+    db_manager = DatabaseManager()
+    try:
+        queryGetAppointment = """SELECT PROCEDURE_VALIDATION_ID FROM tb_appointment WHERE id = ?"""
+        db_manager.execute_query(queryGetAppointment, (idAppointment,))
+        result = db_manager.cursor.fetchone()
 
-def atualizar_status_banco():
-    print("🗂️ Função atualizar_status_banco() iniciada.")
+        if result is None:
+            print(f"❌ Nenhuma validação encontrada para o agendamento {idAppointment}")
+            return False
 
+        idProcedureValidation = result[0]
+        queryUpdateStatus = """UPDATE TB_PROCEDURE_VALIDATION SET PROCEDURE_STATUS_ID = ? WHERE id = ?"""
+        db_manager.execute_query(queryUpdateStatus, (novo_status_id, idProcedureValidation,))
+        print(f"✅ Status da consulta {idAppointment} atualizado para o status ID {novo_status_id} com sucesso.")
+        return True
+    finally:
+        db_manager.close()
 
-def encaminhar_para_validacao_humana():
-    print("🙋 Função encaminhar_para_validacao_humana() iniciada.")
+def valida_consulta_banco(idAppointment):
+    """Valida uma consulta bancária, definindo o status como 'Aprovado sem Irregularidades'."""
+    print("🗂️ Função valida_consulta_banco() iniciada.")
+    _atualizar_status_validacao(idAppointment, 2)
+
+def reanalise_encaminha_validacao(idAppointment):
+    """Reanalisa e encaminha uma validação, definindo o status como 'Em Reanálise'."""
+    print("🙋 Função reanalise_encaminha_validacao() iniciada.")
+    _atualizar_status_validacao(idAppointment, 3)
 
 
 def map_to_dict(mensagem_raw):
@@ -104,18 +139,20 @@ def processar_mensagem(mensagem):
         return
 
     # Baixar as imagens
-    caminhos_imagens = buscar_imagens(msg_data['imgUrlInitial'], msg_data['imgUrlFinal'])
+    pathImages = search_images(msg_data['imgUrlInitial'], msg_data['imgUrlFinal'])
+    
+    classesExpected = [msg_data['classInitial'], msg_data['classFinal']]
 
     # Validar as imagens
-    validado = validar_imagens(caminhos_imagens[0], caminhos_imagens[1])
+    validado = validate_images(pathImages[0], pathImages[1], classesExpected[0], classesExpected[1])
 
     if validado:
-        atualizar_status_banco()
+        valida_consulta_banco(msg_data['idAppointment'])
     else:
-        encaminhar_para_validacao_humana()
+        reanalise_encaminha_validacao(msg_data['idAppointment'])
 
     # 🧹 Deletar as imagens após o uso
-    for caminho in caminhos_imagens:
+    for caminho in pathImages:
         if os.path.exists(caminho):
             os.remove(caminho)
             print(f"🗑️ Imagem deletada: {caminho}")
@@ -152,6 +189,8 @@ def receive_message_from_queue():
         servicebus_client.close()
         print("🔒 Conexão fechada com a fila.")
 
+def formatar_classe(classe: str) -> str:
+    return classe.replace("-", "").replace(" ", "_").upper()
 
 if __name__ == "__main__":
     receive_message_from_queue()
