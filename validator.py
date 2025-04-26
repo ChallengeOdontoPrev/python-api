@@ -4,7 +4,7 @@ import time
 import uuid
 from database_manager import DatabaseManager
 from urllib.parse import urlparse, unquote
-from azure.servicebus import ServiceBusClient
+from azure.servicebus import ServiceBusClient, ServiceBusMessage
 from azure.storage.blob import BlobServiceClient
 from inference_sdk import InferenceHTTPClient
 
@@ -13,8 +13,12 @@ connection_string_blob = os.getenv("CONNECTION_BLOB")
 container_name = "validation-image-container"
 
 # Configurações do Azure Service Bus
-connection_string_bus_listen = os.getenv("CONNECTION_BUS_LISTEN")
-queue_name = "validation-appointment"
+validation_appointment_listen = os.getenv("VALIDATION_APPOINTMENT_LISTEN")
+validation_appointment_queue_name = "validation-appointment"
+
+report_validation_sender = os.getenv("REPORT_VALIDATION_SENDER")
+report_validation_validation_appointment_queue_name = "report-validation"
+
  
 CLIENT = InferenceHTTPClient(
     api_url="https://serverless.roboflow.com",
@@ -26,8 +30,6 @@ def extract_blob_path_from_url(url):
     parsed_url = urlparse(url)
     return unquote(parsed_url.path.split("/", 2)[2])  # Pega o caminho após o nome do container
 
-
-# Função para baixar as imagens do Azure Blob Storage para uma pasta local do projeto
 def search_images(imgUrlInitial, imgUrlFinal):
     print("🔍 Função search_images() iniciada.")
 
@@ -56,13 +58,12 @@ def search_images(imgUrlInitial, imgUrlFinal):
 
     return [temp_img_initial_path, temp_img_final_path]
 
-
 def validate_images(pathImgInitial, pathImgFinal, classInitial, classFinal):
     print("🧠 Função validate_images() iniciada.")
     
-    result1 = CLIENT.infer(pathImgInitial, model_id="aparelho-dentario/2")
+    result1 = CLIENT.infer(pathImgInitial, model_id="valiteeth/1")
     result1 = result1.get("predictions", [{}])[0].get("class")
-    result2 = CLIENT.infer(pathImgFinal, model_id="aparelho-dentario/2")
+    result2 = CLIENT.infer(pathImgFinal, model_id="valiteeth/1")
     result2 = result2.get("predictions", [{}])[0].get("class")
     
     print(f"  Classe identificada na primeira img: {result1}")
@@ -81,7 +82,6 @@ def validate_images(pathImgInitial, pathImgFinal, classInitial, classFinal):
         print("❌ Validação falhou!")
         return False
 
-
 def _atualizar_status_validacao(idAppointment, novo_status_id):
     """Função interna para atualizar o status da validação no banco de dados."""
     print(f"⚙️ Iniciando atualização do status para {idAppointment} com status ID {novo_status_id}.")
@@ -99,6 +99,10 @@ def _atualizar_status_validacao(idAppointment, novo_status_id):
         queryUpdateStatus = """UPDATE TB_PROCEDURE_VALIDATION SET PROCEDURE_STATUS_ID = ? WHERE id = ?"""
         db_manager.execute_query(queryUpdateStatus, (novo_status_id, idProcedureValidation,))
         print(f"✅ Status da consulta {idAppointment} atualizado para o status ID {novo_status_id} com sucesso.")
+        
+        # if novo_status_id == 3:
+        #     send_message_to_queue(f"Reanálise do agendamento {idAppointment} encaminhada para validação.")
+        
         return True
     finally:
         db_manager.close()
@@ -112,7 +116,6 @@ def reanalise_encaminha_validacao(idAppointment):
     """Reanalisa e encaminha uma validação, definindo o status como 'Em Reanálise'."""
     print("🙋 Função reanalise_encaminha_validacao() iniciada.")
     _atualizar_status_validacao(idAppointment, 3)
-
 
 def map_to_dict(mensagem_raw):
     try:
@@ -129,7 +132,6 @@ def map_to_dict(mensagem_raw):
     except Exception as e:
         print(f"❌ Erro ao mapear mensagem: {e}")
         return None
-
 
 def processar_mensagem(mensagem):
     print(f"📥 Processando mensagem: {mensagem}")
@@ -159,14 +161,12 @@ def processar_mensagem(mensagem):
 
     print("✅ Processamento finalizado.\n")
 
-
 def receive_message_from_queue():
-    servicebus_client = ServiceBusClient.from_connection_string(connection_string_bus_listen)
+    servicebus_client = ServiceBusClient.from_connection_string(validation_appointment_listen)
     
     receiver = servicebus_client.get_queue_receiver(
-        queue_name=queue_name  # até 5 minutos, por exemplo
+        queue_name=validation_appointment_queue_name  # até 5 minutos, por exemplo
     )
-
 
     try:
         print("🚀 Iniciando recepção de mensagens...\n")
@@ -186,6 +186,32 @@ def receive_message_from_queue():
         print("\n🛑 Execução interrompida pelo usuário.")
     finally:
         receiver.close()
+        servicebus_client.close()
+        print("🔒 Conexão fechada com a fila.")
+
+def send_message_to_queue(message_body):
+    # Conexão com o Azure Service Bus
+    servicebus_client = ServiceBusClient.from_connection_string(conn_str=report_validation_sender)
+
+    sender = servicebus_client.get_queue_sender(
+        queue_name=report_validation_validation_appointment_queue_name
+    )
+
+    try:
+        print("📤 Enviando mensagem para a fila...\n")
+
+        # Cria a mensagem
+        message = ServiceBusMessage(message_body)
+
+        # Envia a mensagem
+        sender.send_messages(message)
+        print(f"✅ Mensagem enviada: {message_body}")
+
+    except Exception as e:
+        print(f"❌ Erro ao enviar mensagem: {e}")
+
+    finally:
+        sender.close()
         servicebus_client.close()
         print("🔒 Conexão fechada com a fila.")
 
